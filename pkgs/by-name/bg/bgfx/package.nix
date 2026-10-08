@@ -4,6 +4,7 @@
   fetchFromGitHub,
   cmake,
   ninja,
+  ctestCheckHook,
   libGL,
   libx11,
   libxcb,
@@ -14,17 +15,20 @@
   spirv-tools,
   spirv-cross,
   meshoptimizer,
+  libavif,
   callPackage,
 }:
 
 stdenv.mkDerivation (finalAttrs: {
   pname = "bgfx";
-  version = "unstable-2026-10-08";
+  # bgfx.cmake tags combine the bgfx version and the CMake packaging revision.
+  version = "1.164.9539-586";
 
   # Upstream's CMake project pins a compatible set of bgfx, bx and bimg.
   src = fetchFromGitHub {
     owner = "bkaradzic";
     repo = "bgfx.cmake";
+    # v1.164.9539-586; keep the immutable commit as the fetch reference.
     rev = "a0649dcc72ca1dc9fb7ac58e257ae2340be3d070";
     fetchSubmodules = true;
     hash = "sha256-I9HJxnJJapDshch+M80/kQfmWKKpJazSvFrrrHnqqE8=";
@@ -37,12 +41,30 @@ stdenv.mkDerivation (finalAttrs: {
   ];
   strictDeps = true;
 
-  patches = [ ./glslang-public-api.patch ];
+  # GCC's implicit FMA contraction breaks bx scalar/SIMD bitwise parity on ARM.
+  # Keep explicit FMA operations while preventing contraction of ordinary ones.
+  env.NIX_CFLAGS_COMPILE = lib.optionalString stdenv.cc.isGNU "-ffp-contract=off";
+
+  patches = [
+    ./cmake-version.patch
+    ./glslang-public-api.patch
+    ./system-shader-libraries.patch
+    ./system-avif.patch
+  ]
+  ++ lib.optionals stdenv.hostPlatform.isLinux [ ./system-dxc.patch ];
 
   nativeBuildInputs = [
     cmake
     ninja
   ];
+
+  nativeCheckInputs = [ ctestCheckHook ];
+  doCheck = stdenv.buildPlatform.canExecute stdenv.hostPlatform;
+  # Let ctestCheckHook apply disabledTests instead of Ninja running all tests.
+  dontUseNinjaCheck = true;
+  ctestFlags = [ "--no-tests=error" ];
+  # bx.bench measures performance; bx.test contains the upstream unit tests.
+  disabledTests = [ "bx.bench" ];
 
   buildInputs =
     lib.optionals stdenv.hostPlatform.isLinux [
@@ -54,6 +76,7 @@ stdenv.mkDerivation (finalAttrs: {
       spirv-tools
       spirv-cross
       meshoptimizer
+      libavif
     ];
 
   # The exported CMake target links consumers against these libraries.
@@ -73,37 +96,31 @@ stdenv.mkDerivation (finalAttrs: {
         --replace-fail '"libGLESv2.so.2"' '"${lib.getLib libGL}/lib/libGLESv2.so.2"' \
         --replace-fail '"libwayland-egl.so.1"' '"${lib.getLib wayland}/lib/libwayland-egl.so.1"'
 
-      # Use the source-built DXC package instead of upstream's bundled binary.
-      substituteInPlace cmake/bgfx/shaderc.cmake \
-        --replace-fail 'set(DXCOMPILER_RUNTIME ''${BGFX_DIR}/tools/bin/linux/libdxcompiler.so)' 'set(DXCOMPILER_RUNTIME)'
       substituteInPlace bgfx/tools/shaderc/shaderc_dxil.cpp \
-        --replace-fail '"libdxcompiler.so"' '"${lib.getLib directx-shader-compiler}/lib/libdxcompiler.so"' \
-        --replace-fail 'bx::dlopen(dxcCompilerDll.getCPtr() )' 'bx::dlopen(dxcCompilerDllName)'
-
+        --replace-fail '"libdxcompiler.so"' '"${lib.getLib directx-shader-compiler}/lib/libdxcompiler.so"'
     ''
     + ''
+      # shaderc uses the bundled Tint C++ API; replacing it needs a compatible
+      # Dawn/Tint library package. The shader libraries below can be external.
       cp ${./system-shader-libraries.cmake} cmake/bgfx/system-shader-libraries.cmake
-      substituteInPlace cmake/bgfx/CMakeLists.txt \
-        --replace-fail 'include(3rdparty/spirv-opt.cmake)' 'include(system-shader-libraries.cmake)' \
-        --replace-fail 'include(3rdparty/spirv-cross.cmake)' "" \
-        --replace-fail 'include(3rdparty/glslang.cmake)' ""
-      substituteInPlace bgfx/tools/geometryc/geometryc.cpp \
-        --replace-fail '<meshoptimizer/src/meshoptimizer.h>' '<meshoptimizer.h>'
-      substituteInPlace cmake/bgfx/geometryc.cmake \
-        --replace-fail 'PRIVATE ''${MESHOPTIMIZER_INCLUDE_DIR}' 'PRIVATE ''${MESHOPTIMIZER_INCLUDE_DIR} ''${BGFX_DIR}/3rdparty'
     '';
 
   cmakeFlags = [
+    # Source archives lack the Git history used to generate bgfxConfigVersion.cmake.
+    (lib.cmakeFeature "BGFX_REV_NUMBER" (lib.versions.patch finalAttrs.version))
     (lib.cmakeFeature "BGFX_LIBRARY_TYPE" "SHARED")
     (lib.cmakeBool "CMAKE_POSITION_INDEPENDENT_CODE" true)
     (lib.cmakeBool "BGFX_BUILD_EXAMPLES" false)
     (lib.cmakeBool "BGFX_BUILD_TOOLS" true)
+    (lib.cmakeBool "BGFX_BUILD_TESTS" finalAttrs.doCheck)
+    # Avoid collisions with tools from other packages, notably shaderc.
     (lib.cmakeFeature "BGFX_TOOLS_PREFIX" "bgfx-")
     (lib.cmakeFeature "MESHOPTIMIZER_LIBRARIES" "${lib.getLib meshoptimizer}/lib/libmeshoptimizer${stdenv.hostPlatform.extensions.sharedLibrary}")
     (lib.cmakeFeature "MESHOPTIMIZER_INCLUDE_DIR" "${lib.getDev meshoptimizer}/include")
     (lib.cmakeBool "BGFX_CUSTOM_TARGETS" false)
   ];
 
+  # Keep notices for the statically linked bx, bimg and bundled third-party code.
   postInstall = ''
     (
       cd "$src"
@@ -114,8 +131,12 @@ stdenv.mkDerivation (finalAttrs: {
     )
   '';
 
+  # Exercise the installed CMake exports and tools independently of bx unit tests.
   passthru.tests = {
     consumer = callPackage ./test.nix {
+      bgfx = finalAttrs.finalPackage;
+    };
+    textures = callPackage ./texture-test.nix {
       bgfx = finalAttrs.finalPackage;
     };
     shaders = callPackage ./shader-test.nix {
@@ -131,6 +152,8 @@ stdenv.mkDerivation (finalAttrs: {
       bsd3
       asl20
       mit
+      isc # l-smash, linked into texturev
+      zlib # lodepng and nanosvg, embedded in bimg_decode
       cc0
     ];
     maintainers = [ lib.maintainers.uuxyz ];

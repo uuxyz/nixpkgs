@@ -1,3 +1,10 @@
+Use the installed public glslang API for WGSL uniform block reflection.
+The internal type headers are not installed by the packaged glslang.
+shaderc collects numeric uniforms into UniformBlock. The public
+getUniformBlockIndex API maps a uniform to its containing block, whose size
+can then be queried without depending on the internal TType definition.
+Upstream status: not submitted upstream.
+
 --- a/bgfx/tools/shaderc/shaderc_wgsl.cpp
 +++ b/bgfx/tools/shaderc/shaderc_wgsl.cpp
 @@ -22,8 +22,6 @@

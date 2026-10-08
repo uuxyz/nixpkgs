@@ -2,12 +2,16 @@
   lib,
   stdenv,
   runCommand,
+  python3,
   bgfx,
 }:
 
 runCommand "bgfx-shader-test"
   {
-    nativeBuildInputs = [ (lib.getBin bgfx) ];
+    nativeBuildInputs = [
+      (lib.getBin bgfx)
+      python3
+    ];
   }
   (
     ''
@@ -34,6 +38,9 @@ runCommand "bgfx-shader-test"
           test "$(head -c 3 "$output")" = "$magic"
         done
       done
+
+      python3 ${./test/check-wgsl.py} \
+        ${lib.getDev bgfx}/include/bgfx ${./test/varying.def.sc} "$out/reflection"
 
     ''
     + lib.optionalString stdenv.hostPlatform.isLinux ''

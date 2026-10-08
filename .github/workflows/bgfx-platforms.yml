@@ -65,6 +65,7 @@ jobs:
             -A bgfx -A bgfx.bin \
             -A bgfx.passthru.tests.consumer \
             -A bgfx.passthru.tests.shaders \
+            -A bgfx.passthru.tests.textures \
             --no-out-link --cores 2 --max-jobs 1 \
             2>&1 | tee bgfx-ci-logs/build.log
 
