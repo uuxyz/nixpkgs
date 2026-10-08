@@ -1,0 +1,88 @@
+name: bgfx platform tests
+
+on:
+  pull_request:
+    branches: [add-bgfx]
+    paths:
+      - pkgs/by-name/bg/bgfx/**
+      - .github/workflows/bgfx-platforms.yml
+      - ci/bgfx/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bgfx-platforms-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: github.repository == 'uuxyz/nixpkgs' && github.event.pull_request.head.repo.full_name == github.repository
+    name: ${{ matrix.system }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            system: x86_64-linux
+          - runner: ubuntu-24.04-arm
+            system: aarch64-linux
+          - runner: macos-15
+            system: aarch64-darwin
+    env:
+      NIX_SYSTEM: ${{ matrix.system }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            cores = 2
+            max-jobs = 1
+
+      - name: Record the revision and native platform
+        shell: bash
+        run: |
+          mkdir -p bgfx-ci-logs
+          git rev-parse HEAD | tee bgfx-ci-logs/revision.txt
+          nix --version | tee bgfx-ci-logs/nix-version.txt
+          actual_system="$(nix eval --impure --raw --expr builtins.currentSystem)"
+          printf '%s\n' "$actual_system" | tee bgfx-ci-logs/system.txt
+          test "$actual_system" = "$NIX_SYSTEM"
+
+      - name: Build the package and run installed consumer and shader tests
+        shell: bash
+        run: |
+          nix-build --argstr system "$NIX_SYSTEM" \
+            -A bgfx -A bgfx.bin \
+            -A bgfx.passthru.tests.consumer \
+            -A bgfx.passthru.tests.shaders \
+            -A bgfx.passthru.tests.textures \
+            --no-out-link --cores 2 --max-jobs 1 \
+            2>&1 | tee bgfx-ci-logs/build.log
+
+      - name: Report Metal device availability
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          xcrun clang -fobjc-arc -framework Foundation -framework Metal \
+            ci/bgfx/metal-device.m -o "$RUNNER_TEMP/bgfx-metal-device"
+          "$RUNNER_TEMP/bgfx-metal-device" | tee bgfx-ci-logs/metal-device.txt
+          cat bgfx-ci-logs/metal-device.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bgfx-${{ matrix.system }}
+          path: bgfx-ci-logs/
+          if-no-files-found: warn
+          retention-days: 7

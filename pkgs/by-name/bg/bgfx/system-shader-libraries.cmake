@@ -1,3 +1,4 @@
+# Preserve the target names expected by shaderc while using installed libraries.
 find_package(glslang CONFIG REQUIRED)
 add_library(glslang INTERFACE)
 target_link_libraries(glslang INTERFACE
@@ -18,6 +19,7 @@ find_package(SPIRV-Tools-opt CONFIG REQUIRED)
 add_library(spirv-opt INTERFACE)
 target_link_libraries(spirv-opt INTERFACE SPIRV-Tools-opt)
 
+# Load glsl before cpp: the exported cpp target references spirv-cross-glsl.
 foreach(component core glsl hlsl msl cpp reflect util)
     find_package(spirv_cross_${component} CONFIG REQUIRED)
 endforeach()
