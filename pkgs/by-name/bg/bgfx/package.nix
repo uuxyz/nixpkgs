@@ -44,48 +44,54 @@ stdenv.mkDerivation (finalAttrs: {
     ninja
   ];
 
-  buildInputs = [
-    libxcb
-    wayland
-    glslang
-    spirv-tools
-    spirv-cross
-    meshoptimizer
-  ];
+  buildInputs =
+    lib.optionals stdenv.hostPlatform.isLinux [
+      libxcb
+      wayland
+    ]
+    ++ [
+      glslang
+      spirv-tools
+      spirv-cross
+      meshoptimizer
+    ];
 
   # The exported CMake target links consumers against these libraries.
-  propagatedBuildInputs = [
+  propagatedBuildInputs = lib.optionals stdenv.hostPlatform.isLinux [
     libGL
     libx11
   ];
 
   # These backends load their libraries at runtime rather than linking them.
-  postPatch = ''
-    substituteInPlace bgfx/src/renderer_vk.cpp \
-      --replace-fail '"libvulkan.so.1"' '"${lib.getLib vulkan-loader}/lib/libvulkan.so.1"'
-    substituteInPlace bgfx/src/glcontext_egl.cpp \
-      --replace-fail '"libEGL.so.1"' '"${lib.getLib libGL}/lib/libEGL.so.1"' \
-      --replace-fail '"libGL.so.1"' '"${lib.getLib libGL}/lib/libGL.so.1"' \
-      --replace-fail '"libGLESv2.so.2"' '"${lib.getLib libGL}/lib/libGLESv2.so.2"' \
-      --replace-fail '"libwayland-egl.so.1"' '"${lib.getLib wayland}/lib/libwayland-egl.so.1"'
+  postPatch =
+    lib.optionalString stdenv.hostPlatform.isLinux ''
+      substituteInPlace bgfx/src/renderer_vk.cpp \
+        --replace-fail '"libvulkan.so.1"' '"${lib.getLib vulkan-loader}/lib/libvulkan.so.1"'
+      substituteInPlace bgfx/src/glcontext_egl.cpp \
+        --replace-fail '"libEGL.so.1"' '"${lib.getLib libGL}/lib/libEGL.so.1"' \
+        --replace-fail '"libGL.so.1"' '"${lib.getLib libGL}/lib/libGL.so.1"' \
+        --replace-fail '"libGLESv2.so.2"' '"${lib.getLib libGL}/lib/libGLESv2.so.2"' \
+        --replace-fail '"libwayland-egl.so.1"' '"${lib.getLib wayland}/lib/libwayland-egl.so.1"'
 
-    # Use the source-built DXC package instead of upstream's bundled binary.
-    substituteInPlace cmake/bgfx/shaderc.cmake \
-      --replace-fail 'set(DXCOMPILER_RUNTIME ''${BGFX_DIR}/tools/bin/linux/libdxcompiler.so)' 'set(DXCOMPILER_RUNTIME)'
-    substituteInPlace bgfx/tools/shaderc/shaderc_dxil.cpp \
-      --replace-fail '"libdxcompiler.so"' '"${lib.getLib directx-shader-compiler}/lib/libdxcompiler.so"' \
-      --replace-fail 'bx::dlopen(dxcCompilerDll.getCPtr() )' 'bx::dlopen(dxcCompilerDllName)'
+      # Use the source-built DXC package instead of upstream's bundled binary.
+      substituteInPlace cmake/bgfx/shaderc.cmake \
+        --replace-fail 'set(DXCOMPILER_RUNTIME ''${BGFX_DIR}/tools/bin/linux/libdxcompiler.so)' 'set(DXCOMPILER_RUNTIME)'
+      substituteInPlace bgfx/tools/shaderc/shaderc_dxil.cpp \
+        --replace-fail '"libdxcompiler.so"' '"${lib.getLib directx-shader-compiler}/lib/libdxcompiler.so"' \
+        --replace-fail 'bx::dlopen(dxcCompilerDll.getCPtr() )' 'bx::dlopen(dxcCompilerDllName)'
 
-    cp ${./system-shader-libraries.cmake} cmake/bgfx/system-shader-libraries.cmake
-    substituteInPlace cmake/bgfx/CMakeLists.txt \
-      --replace-fail 'include(3rdparty/spirv-opt.cmake)' 'include(system-shader-libraries.cmake)' \
-      --replace-fail 'include(3rdparty/spirv-cross.cmake)' "" \
-      --replace-fail 'include(3rdparty/glslang.cmake)' ""
-    substituteInPlace bgfx/tools/geometryc/geometryc.cpp \
-      --replace-fail '<meshoptimizer/src/meshoptimizer.h>' '<meshoptimizer.h>'
-    substituteInPlace cmake/bgfx/geometryc.cmake \
-      --replace-fail 'PRIVATE ''${MESHOPTIMIZER_INCLUDE_DIR}' 'PRIVATE ''${MESHOPTIMIZER_INCLUDE_DIR} ''${BGFX_DIR}/3rdparty'
-  '';
+    ''
+    + ''
+      cp ${./system-shader-libraries.cmake} cmake/bgfx/system-shader-libraries.cmake
+      substituteInPlace cmake/bgfx/CMakeLists.txt \
+        --replace-fail 'include(3rdparty/spirv-opt.cmake)' 'include(system-shader-libraries.cmake)' \
+        --replace-fail 'include(3rdparty/spirv-cross.cmake)' "" \
+        --replace-fail 'include(3rdparty/glslang.cmake)' ""
+      substituteInPlace bgfx/tools/geometryc/geometryc.cpp \
+        --replace-fail '<meshoptimizer/src/meshoptimizer.h>' '<meshoptimizer.h>'
+      substituteInPlace cmake/bgfx/geometryc.cmake \
+        --replace-fail 'PRIVATE ''${MESHOPTIMIZER_INCLUDE_DIR}' 'PRIVATE ''${MESHOPTIMIZER_INCLUDE_DIR} ''${BGFX_DIR}/3rdparty'
+    '';
 
   cmakeFlags = [
     (lib.cmakeFeature "BGFX_LIBRARY_TYPE" "SHARED")
@@ -93,7 +99,7 @@ stdenv.mkDerivation (finalAttrs: {
     (lib.cmakeBool "BGFX_BUILD_EXAMPLES" false)
     (lib.cmakeBool "BGFX_BUILD_TOOLS" true)
     (lib.cmakeFeature "BGFX_TOOLS_PREFIX" "bgfx-")
-    (lib.cmakeFeature "MESHOPTIMIZER_LIBRARIES" "${lib.getLib meshoptimizer}/lib/libmeshoptimizer.so")
+    (lib.cmakeFeature "MESHOPTIMIZER_LIBRARIES" "${lib.getLib meshoptimizer}/lib/libmeshoptimizer${stdenv.hostPlatform.extensions.sharedLibrary}")
     (lib.cmakeFeature "MESHOPTIMIZER_INCLUDE_DIR" "${lib.getDev meshoptimizer}/include")
     (lib.cmakeBool "BGFX_CUSTOM_TARGETS" false)
   ];
@@ -128,7 +134,7 @@ stdenv.mkDerivation (finalAttrs: {
       cc0
     ];
     maintainers = [ lib.maintainers.uuxyz ];
-    platforms = lib.platforms.linux;
+    platforms = lib.platforms.linux ++ lib.platforms.darwin;
     mainProgram = "bgfx-shaderc";
     outputsToInstall = [
       "out"
